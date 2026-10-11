@@ -35,6 +35,7 @@ function DebugLog() {
 
   return (
     <FormSection title="Debug log" titleStyleType="no_border">
+      <FormRow label="Banner value stored right now" subLabel={storage.banner ? `"${storage.banner}"` : "(empty)"} />
       <FormRow label="Copy log" subLabel={`${logs.length} lines`} onPress={copyLog} />
       <FormRow label="Clear log" onPress={() => clearLogs()} />
       <FormText style={{ marginHorizontal: 16, marginTop: 8, opacity: 0.6 }}>
@@ -72,7 +73,7 @@ export default function Settings() {
       <FormSection title="Clyde Editor" titleStyleType="no_border">
         <FormInput title="Name" placeholder="Clyde" value={storage.name} onChange={(v: string) => (storage.name = v)} />
         <FormInput title="Avatar" placeholder="https://example.com/avatar.png" value={storage.avatar} onChange={(v: string) => (storage.avatar = v)} />
-        <FormInput title="Banner" placeholder="https://example.com/banner.png" value={storage.banner} onChange={(v: string) => (storage.banner = v)} />
+        <FormInput title="Banner" placeholder="https://example.com/banner.png" value={storage.banner} onChange={(v: string) => { storage.banner = v; dlog("banner field changed, stored value now", `"${storage.banner}"`); }} />
         <FormText style={{ margin: 16, opacity: 0.6 }}>
           Leave a field empty to keep Clyde's default name, avatar or banner. You should reload after updating.
         </FormText>
