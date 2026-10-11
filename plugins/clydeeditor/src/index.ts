@@ -6,7 +6,7 @@ import { showToast } from "@vendetta/ui/toasts";
 import { dlog, hit } from "./debug";
 import Settings from "./Settings";
 
-const VERSION = "1.1.0-debug";
+const VERSION = "1.2.0-debug";
 
 const CLYDE_ID = "1";
 
@@ -102,6 +102,21 @@ function patchDisplayProfile(profile: any, userId?: string): void {
   }
 }
 
+// Clyde is a system user and has no profile in the store, so the profile screen
+// has nothing to draw a banner from. this is a minimal stand-in that carries one
+function makeSyntheticProfile(id: string): any {
+  return {
+    userId: id,
+    banner: PLACEHOLDER_HASH,
+    bio: "",
+    accentColor: null,
+    themeColors: undefined,
+    badges: [],
+    connectedAccounts: [],
+    getBannerURL: () => getBannerOverride(id),
+  };
+}
+
 // the hook the profile screen calls with { user, displayProfile, ... }
 function bannerHookWrapper(original: Function, self: any, args: any[]) {
   // first few calls for anyone, to see what the profile screen passes in
@@ -118,7 +133,25 @@ function bannerHookWrapper(original: Function, self: any, args: any[]) {
       if (arg.displayProfile) patchDisplayProfile(arg.displayProfile, arg.user?.id);
     }
   }
-  return original.apply(self, args);
+
+  // Clyde arrives without a displayProfile: hand the hook a stand-in that has the banner
+  let supplied = false;
+  const callArgs = args.map((arg) => {
+    if (arg && typeof arg === "object" && !arg.displayProfile && (arg.user?.id ?? arg.userId) === CLYDE_ID && getBannerOverride(CLYDE_ID)) {
+      supplied = true;
+      return { ...arg, displayProfile: makeSyntheticProfile(CLYDE_ID) };
+    }
+    return arg;
+  });
+  if (!supplied) return original.apply(self, args);
+
+  hit("profile hook: no displayProfile for Clyde, supplied a stand-in");
+  try {
+    return original.apply(self, callArgs);
+  } catch (e) {
+    dlog("profile hook threw with the stand-in, falling back to the original arguments", e);
+    return original.apply(self, args);
+  }
 }
 
 // getUserBannerURL and friends, for any screen that builds a banner URL itself
@@ -148,7 +181,11 @@ function makeProfileWrapper(name: string) {
   return (original: Function, self: any, args: any[]) => {
     const profile = original.apply(self, args);
     if (args[0] === CLYDE_ID) {
-      hit(`UserProfileStore.${name}(Clyde)`, { returned: profile ? Object.keys(profile).slice(0, 20) : profile });
+      hit(`UserProfileStore.${name}(Clyde)`, { returned: profile ? Object.keys(profile).slice(0, 20) : String(profile) });
+      if (!profile && name === "getUserProfile" && getBannerOverride(CLYDE_ID)) {
+        hit("UserProfileStore.getUserProfile: no profile for Clyde, returned a stand-in");
+        return makeSyntheticProfile(CLYDE_ID);
+      }
       addPlaceholderBanner(profile, args[0], `UserProfileStore.${name}`);
     }
     return profile;

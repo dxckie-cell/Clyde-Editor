@@ -64,7 +64,7 @@ export function hit(key: string, data?: any, logFirst = 3): number {
 }
 
 // names used by diagnostics.ts, which expects these from this module
-export const BUILD = "1.1.0-debug";
+export const BUILD = "1.2.0-debug";
 
 export function debug(message: string): void {
   dlog(message);
