@@ -1,42 +1,7 @@
-import { React, ReactNative } from "@vendetta/metro/common";
-import { findByProps } from "@vendetta/metro";
+import { ReactNative } from "@vendetta/metro/common";
 import { useProxy } from "@vendetta/storage";
 import { storage } from "@vendetta/plugin";
 import { Forms } from "@vendetta/ui/components";
-import { showToast } from "@vendetta/ui/toasts";
-import { clearLogs, dlog, getLogText, logs, subscribe } from "./debug";
-
-function copyLog(): void {
-  try {
-    const clipboard = findByProps("setString")?.setString ? findByProps("setString") : ReactNative.Clipboard;
-    clipboard.setString(getLogText());
-    showToast("Debug log copied");
-  } catch (e) {
-    dlog("copy failed", e);
-    showToast("Could not copy, select the text instead");
-  }
-}
-
-function DebugLog() {
-  const { FormSection, FormRow } = (Forms ?? {}) as any;
-  const { Text, View } = ReactNative;
-
-  // re-render whenever a line is added
-  const [, bump] = React.useReducer((n: number) => n + 1, 0);
-  React.useEffect(() => subscribe(bump), []);
-
-  return (
-    <FormSection title="Debug log" titleStyleType="no_border">
-      <FormRow label="Copy log" subLabel={`${logs.length} lines`} onPress={copyLog} />
-      <FormRow label="Clear log" onPress={() => clearLogs()} />
-      <View style={{ margin: 16 }}>
-        <Text selectable style={{ fontFamily: "monospace", fontSize: 11, opacity: 0.8 }}>
-          {logs.length ? logs.join("\n") : "(empty)"}
-        </Text>
-      </View>
-    </FormSection>
-  );
-}
 
 export default function Settings() {
   useProxy(storage);
@@ -54,7 +19,6 @@ export default function Settings() {
           Leave a field empty to keep Clyde's default name, avatar or banner. You should reload after updating.
         </FormText>
       </FormSection>
-      <DebugLog />
     </ScrollView>
   );
 }

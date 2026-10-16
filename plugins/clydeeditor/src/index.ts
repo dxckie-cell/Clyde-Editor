@@ -3,93 +3,57 @@ import { FluxDispatcher } from "@vendetta/metro/common";
 import { after } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 import { showToast } from "@vendetta/ui/toasts";
-import { dlog } from "./debug";
 import Settings from "./Settings";
 
 const CLYDE_ID = "1";
 
-// placeholder banner hash, only used so the profile UI renders a banner area
-// for Clyde (who has no banner of his own); the real image comes from the override
+// placeholder banner hash, only so the profile UI draws a banner area;
+// the real image comes from the override
 const PLACEHOLDER_HASH = "clyde-editor-banner";
 
 const UserStore = findByStoreName("UserStore");
 const AvatarUtils = findByProps("getUserAvatarSource");
 const patches: (() => void)[] = [];
 
-// users and profiles we put a placeholder banner on, with what it was before
+// user objects we put the placeholder on, so unload can restore them
 const injected = new Map<any, any>();
 
-// display profiles (what the profile screen reads) that are already handled
+// display profiles already patched
 const handledProfiles = new WeakSet<object>();
 
-// looks up the banner at call time so edits in settings apply without reloading
-function getBannerOverride(userId?: string): string | undefined {
-  if (userId !== CLYDE_ID) return undefined;
-  const url = typeof storage.banner === "string" ? storage.banner.trim() : "";
-  return url || undefined;
+// read at call time so edits in settings apply without reloading
+function getBanner(userId?: string): string | undefined {
+  if (userId !== CLYDE_ID || typeof storage.banner !== "string") return undefined;
+  return storage.banner.trim() || undefined;
 }
 
-// wraps obj[key] so that `wrapper(original, self, args)` runs instead, and
-// registers a function that puts the original back on unload
+// replaces obj[key] with wrapper(original, self, args) and undoes it on unload
 function wrap(obj: any, key: string, wrapper: (original: Function, self: any, args: any[]) => any): boolean {
   try {
     const original = obj?.[key];
     if (typeof original !== "function") return false;
-
     obj[key] = function (this: any, ...args: any[]) {
       return wrapper(original, this, args);
     };
     patches.push(() => { obj[key] = original; });
     return true;
   } catch (e) {
-    dlog(`could not patch ${key}`, e);
+    console.log(`[ClydeEditor] could not patch ${key}`, e);
     return false;
   }
 }
 
-// gives Clyde's user a banner so the profile screen draws the banner area.
-// changed in place (and restored on unload) so any methods keep working
-function addPlaceholderBanner(target: any, userId?: string): void {
-  if (!target || target.banner || !getBannerOverride(userId)) return;
+function addPlaceholder(target: any, userId?: string): void {
+  if (!target || target.banner || !getBanner(userId)) return;
   try {
     injected.set(target, target.banner);
     target.banner = PLACEHOLDER_HASH;
-  } catch (e) {
-    dlog("could not set placeholder banner (frozen object?)", e);
-  }
+  } catch { /* frozen objects are left alone */ }
 }
 
-// the profile screen builds its banner from a "displayProfile" object, so
-// that object's getBannerURL is pointed at the override
-function patchDisplayProfile(profile: any, userId?: string): void {
-  if (!profile || typeof profile !== "object" || handledProfiles.has(profile)) return;
-
-  const id = userId ?? profile.userId;
-  if (!getBannerOverride(id)) return;
-  handledProfiles.add(profile);
-
-  const original = profile.getBannerURL;
-  try {
-    if (!profile.banner) {
-      Object.defineProperty(profile, "banner", { value: PLACEHOLDER_HASH, configurable: true, writable: true, enumerable: true });
-    }
-    Object.defineProperty(profile, "getBannerURL", {
-      value: function (...args: any[]) {
-        // looked up again on every call so edits and removals apply at once
-        return getBannerOverride(id) ?? (typeof original === "function" ? original.apply(profile, args) : undefined);
-      },
-      configurable: true,
-      writable: true,
-      enumerable: true,
-    });
-  } catch (e) {
-    dlog("could not patch the display profile (frozen object?)", e);
-  }
-}
-
-// Clyde is a system user and has no profile in the store, so the profile screen
-// has nothing to draw a banner from. this is a minimal stand-in that carries one
-function makeStandInProfile(id: string): any {
+// Clyde is a system user with no profile in the store, so the profile screen
+// has nothing to draw a banner from. this stands in for one
+function standInProfile(id: string): any {
   return {
     userId: id,
     banner: PLACEHOLDER_HASH,
@@ -98,24 +62,42 @@ function makeStandInProfile(id: string): any {
     themeColors: undefined,
     badges: [],
     connectedAccounts: [],
-    getBannerURL: () => getBannerOverride(id),
+    getBannerURL: () => getBanner(id),
   };
 }
 
-// the hook the profile screen calls with { user, displayProfile, ... }
-function bannerHookWrapper(original: Function, self: any, args: any[]) {
+// points an existing display profile's getBannerURL at the override
+function patchDisplayProfile(profile: any, userId?: string): void {
+  const id = userId ?? profile?.userId;
+  if (!profile || typeof profile !== "object" || handledProfiles.has(profile) || !getBanner(id)) return;
+  handledProfiles.add(profile);
+
+  const original = profile.getBannerURL;
+  try {
+    if (!profile.banner) {
+      Object.defineProperty(profile, "banner", { value: PLACEHOLDER_HASH, configurable: true, writable: true, enumerable: true });
+    }
+    Object.defineProperty(profile, "getBannerURL", {
+      value: (...args: any[]) => getBanner(id) ?? original?.apply(profile, args),
+      configurable: true,
+      writable: true,
+      enumerable: true,
+    });
+  } catch { /* frozen objects are left alone */ }
+}
+
+// the profile screen's hook, called with { user, displayProfile, ... }
+function bannerHook(original: Function, self: any, args: any[]) {
   let standIn = false;
   const callArgs = args.map((arg) => {
     if (!arg || typeof arg !== "object") return arg;
-
     if (arg.displayProfile) {
       patchDisplayProfile(arg.displayProfile, arg.user?.id);
       return arg;
     }
-    // Clyde arrives without a displayProfile: hand the hook a stand-in that has the banner
-    if ((arg.user?.id ?? arg.userId) === CLYDE_ID && getBannerOverride(CLYDE_ID)) {
+    if ((arg.user?.id ?? arg.userId) === CLYDE_ID && getBanner(CLYDE_ID)) {
       standIn = true;
-      return { ...arg, displayProfile: makeStandInProfile(CLYDE_ID) };
+      return { ...arg, displayProfile: standInProfile(CLYDE_ID) };
     }
     return arg;
   });
@@ -123,77 +105,59 @@ function bannerHookWrapper(original: Function, self: any, args: any[]) {
 
   try {
     return original.apply(self, callArgs);
-  } catch (e) {
-    dlog("profile hook failed with the stand-in profile, using the original", e);
+  } catch {
     return original.apply(self, args);
   }
 }
 
-// getUserBannerURL and friends, for any screen that builds a banner URL itself
-function urlGetterWrapper(original: Function, self: any, args: any[]) {
+// getUserBannerURL and friends, for screens that build the URL themselves
+function urlGetter(original: Function, self: any, args: any[]) {
   const first = args[0];
   const id = typeof first === "string" ? first : (first?.id ?? first?.userId);
-  return getBannerOverride(id) ?? original.apply(self, args);
+  return getBanner(id) ?? original.apply(self, args);
 }
 
-function patchUrlGetter(name: string): boolean {
-  const mod = findByProps(name);
-  return !!mod && wrap(mod, name, urlGetterWrapper);
-}
-
-// profile lookups: Clyde has none, so he gets a stand-in carrying the banner
-function profileWrapper(original: Function, self: any, args: any[]) {
+// profile lookups: Clyde has no profile, so he gets a stand-in
+const profileLookup = (standIn: boolean) => (original: Function, self: any, args: any[]) => {
   const profile = original.apply(self, args);
-  if (args[0] !== CLYDE_ID || !getBannerOverride(CLYDE_ID)) return profile;
-  if (!profile && original === originalGetUserProfile) return makeStandInProfile(CLYDE_ID);
-  addPlaceholderBanner(profile, args[0]);
+  if (args[0] !== CLYDE_ID || !getBanner(CLYDE_ID)) return profile;
+  if (!profile && standIn) return standInProfile(CLYDE_ID);
+  addPlaceholder(profile, args[0]);
   return profile;
-}
-
-let originalGetUserProfile: Function | undefined;
+};
 
 function patchBanner() {
-  // a placeholder left behind by an earlier load that was not unloaded
+  // a placeholder left behind by a load that was never unloaded
   try {
-    const user = UserStore?.getUser(CLYDE_ID);
-    if (user && user.banner === PLACEHOLDER_HASH) user.banner = null;
-  } catch {
-    // nothing to clean up
+    const user = UserStore.getUser(CLYDE_ID);
+    if (user?.banner === PLACEHOLDER_HASH) user.banner = null;
+  } catch { /* nothing to clean up */ }
+
+  const hooks = findByProps("useUserProfileBannerBackgroundColor");
+  if (hooks) wrap(hooks, "useUserProfileBannerBackgroundColor", bannerHook);
+
+  for (const name of ["getUserBannerURL", "getGuildMemberBannerURL"]) {
+    const mod = findByProps(name);
+    if (mod) wrap(mod, name, urlGetter);
   }
 
-  const hookModule = findByProps("useUserProfileBannerBackgroundColor");
-  const hookOk = !!hookModule && wrap(hookModule, "useUserProfileBannerBackgroundColor", bannerHookWrapper);
-
-  const getters = ["getUserBannerURL", "getGuildMemberBannerURL"].filter(patchUrlGetter);
-
   const UserProfileStore = findByStoreName("UserProfileStore");
-  originalGetUserProfile = UserProfileStore?.getUserProfile;
-  const profilesOk = !!UserProfileStore && [
-    wrap(UserProfileStore, "getUserProfile", profileWrapper),
-    wrap(UserProfileStore, "getGuildMemberProfile", profileWrapper),
-  ].some(Boolean);
+  if (UserProfileStore) {
+    wrap(UserProfileStore, "getUserProfile", profileLookup(true));
+    wrap(UserProfileStore, "getGuildMemberProfile", profileLookup(false));
+  }
 
-  const userOk = wrap(UserStore, "getUser", (original, self, args) => {
+  wrap(UserStore, "getUser", (original, self, args) => {
     const user = original.apply(self, args);
-    if (args[0] === CLYDE_ID) addPlaceholderBanner(user, args[0]);
+    if (args[0] === CLYDE_ID) addPlaceholder(user, args[0]);
     return user;
   });
 
-  // one line that says what was found, so a missing patch target is obvious
-  dlog("banner patches", {
-    profileHook: hookOk ? "ok" : "MISSING",
-    urlGetters: getters.length ? getters.join(", ") : "MISSING",
-    profileStore: profilesOk ? "ok" : "MISSING",
-    userStore: userOk ? "ok" : "MISSING",
-  });
-
-  // refresh ui so an existing banner override shows up right away
+  // refresh the ui so an existing override shows right away
   try {
-    const user = UserStore?.getUser(CLYDE_ID);
+    const user = UserStore.getUser(CLYDE_ID);
     if (user) FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
-  } catch {
-    // the next time the profile opens will show it anyway
-  }
+  } catch { /* shows the next time the profile opens */ }
 }
 
 export default {
@@ -203,12 +167,6 @@ export default {
       storage.avatar ??= "";
       storage.banner ??= "";
 
-      dlog("loaded", {
-        name: storage.name || "(default)",
-        avatar: storage.avatar ? "set" : "(default)",
-        banner: storage.banner ? "set" : "(default)",
-      });
-
       if (UserStore) {
         patches.push(
           after("getUser", UserStore, ([id]: string[], user: any) => {
@@ -217,8 +175,7 @@ export default {
             user.globalName = storage.name;
           })
         );
-      } else {
-        dlog("UserStore not found, nothing patched");
+        patchBanner();
       }
       if (AvatarUtils) {
         patches.push(
@@ -226,19 +183,15 @@ export default {
             if (user?.id === CLYDE_ID && storage.avatar) return { uri: storage.avatar };
           })
         );
-      } else {
-        dlog("avatar function not found");
       }
-      if (UserStore) patchBanner();
     } catch (e) {
-      dlog("error on load", e);
-      showToast("Clyde Editor error, check the debug log in its settings");
+      console.log("[ClydeEditor] onLoad error", e);
+      showToast("Clyde Editor error, check logs");
     }
   },
   onUnload() {
-    // undone in reverse so patches stacked on the same function come off cleanly
+    // reverse order so patches stacked on the same function come off cleanly
     patches.splice(0).reverse().forEach((p) => p());
-
     injected.forEach((original, target) => {
       try { target.banner = original; } catch { /* nothing to restore */ }
     });
