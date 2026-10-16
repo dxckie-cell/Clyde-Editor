@@ -3,8 +3,7 @@
     "description": "A tool to modify Clyde's name, profile picture, and banner.",
     "authors": [
         {
-            "name": "thesillyuluv",
-            "id": "1445892845956235407"
+            "name": "dxckie cell"
         }
     ],
     "main": "src/index.ts",
